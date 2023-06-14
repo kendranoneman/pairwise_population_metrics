@@ -1,4 +1,4 @@
-function [ls, psv, d, eigspec] = compute_population_metrics(X, zDims)
+function [lsN, ls, psvN, psv, d, eigspec] = compute_population_metrics(X, zDims)
 %
 % fits factor analysis (using crossvalidaiton to select a dimensionality) 
 % and then computes population metrics and shared eigenspectrum
@@ -28,8 +28,8 @@ function [ls, psv, d, eigspec] = compute_population_metrics(X, zDims)
     params = dims(max_idx).estParams;
     
     % compute loading similarity, %sv, dshared, and shared eigenspectrum
-    ls = compute_load_sim(params);
-    psv = compute_perc_shared(params);
+    [lsN,ls] = compute_load_sim(params);
+    [psvN,psv] = compute_perc_shared(params);
     d = compute_dshared(params);
     eigspec = compute_shared_eigspec(params);
 

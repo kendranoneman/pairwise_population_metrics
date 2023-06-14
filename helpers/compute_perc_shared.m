@@ -1,4 +1,4 @@
-function [ avg_psv ] = compute_perc_shared( fa_model )
+function [ perc_shared, avg_psv ] = compute_perc_shared( fa_model )
 %
 % computes the percent shared variance
 %

@@ -1,4 +1,4 @@
-function [ loading_similarity ] = compute_load_sim( fa_model )
+function [ L_orth, loading_similarity ] = compute_load_sim( fa_model )
 %
 % computes the loading similarity of each dimension
 %
@@ -14,6 +14,7 @@ function [ loading_similarity ] = compute_load_sim( fa_model )
 
     % return empty if 'L' does not exist
     if ~isfield(fa_model,'L')
+        L_orth=[];
         loading_similarity=[];
         return
     end
