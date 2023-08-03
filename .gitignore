@@ -1,3 +1,4 @@
 *.asv
 .DS_Store
 *.swp
+process_recordings/example_data/
