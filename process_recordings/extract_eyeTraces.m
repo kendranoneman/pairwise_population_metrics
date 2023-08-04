@@ -1,145 +1,72 @@
-function extract_eyeTraces(datafolder,datafiles,kernel,colors,window_s)
+function tbl = extract_eyeTraces(datafolder,datafile,eventNames,kernel)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Function for extracting and preprocessing eye traces from .ns5 files
 %%%%%%%%%% INPUTS %%%%%%%%%%%
 % datafolder = string/char of full path where data is stored
-% datafiles = cell array of datafile names
-% kernel = size of gaussian kernel for smoothing (bigger = more smoothing)
-% colors = 1x2 cell array (rgb color for horizontal and vertical traces)
-% window_s = window (in sec) that you want to plot
+% datafile = datafile name
+% eventNames = cell array of eventNames you want to store the times of
+% kernel = how much to smooth eye position before calculating vel/acc
 
 %%%%%%%%%% OUTPUTS %%%%%%%%%%%
-% eyeTraces --> table with eye traces
-%    - length_s = length of recording session in seconds
-%    - time_s = time points (in sec) to coincide with each datapoint
-%    - pos_raw = [HE VE] eye position, after downsampling Fs to 1000 Hz
-%    - vel_raw = [HE VE] eye velocity, after downsampling Fs to 1000 Hz
-%    - vel_raw = [HE VE] pupil diameter, after downsampling Fs to 1000 Hz
-%    - pos_filtered = [HE VE] eye position, after "removing" blinks/artifacts
-%                     (found points with velocity > 600 deg/s & interpolated)
-%          ...
-%    - pos_smoothed = [HE VE] eye position, after "smoothing" filtered data
+% tbl --> table with eye traces (Fs of 1000 Hz) and standard info for each trial
+%    - trialName = session name + (number starting from 1 to total trials)
+%    - trialOutcome = result based on eventCodes
+%    - conditions (e.g. fixDuration) = conditions separated into columns
+%    - times (e.g. FIX_ON) = "times" in ms (but really indices), where 
+%                     time = 1 is "START_TRIAL", for desired events 
+%    - eyePos = [HE VE] eye position, after "smoothing" filtered data
 %                     (filtering data with a Gaussian window, based on kernel input)
+%    - eyeVel = [HE VE] eye velocity
+%    - eyeAcc = [HE VE] eye acceleration 
 
 %%%%%%%%%% EXAMPLE %%%%%%%%%%%
-% e.g. datafolder = '/Users/kendranoneman/Projects/mayo/n64/pb18n64_K_trials';
-%      datafiles = {'pb18n64_K_trial50011';'pb18n64_K_trial650012';'pb18n64_K_trial7650013'};
-%      colors = {[255,0,0]./255; [0,0,255]./255};
-%      window_s = [0 1]
-% "extract_eyeTraces(dataFolder,datafiles,10,colors)
+% e.g. datafolder = '/Users/kendranoneman/Projects/mayo/HelperFxns/process_recordings/example_data';
+%      datafile = 'sb01pursA65650026';
+%      eventNames = {'START_TRIAL','FIX_ON','FIX_OFF','REWARD','TARG_ON','FIXATE','IGNORED','BROKE_FIX','BROKE_TARG'}
+% "extract_eyeTraces(dataFolder,datafile,eventNames)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-varnames = ["session_name","subject_name","trial_number","length_s","time_s","pos_raw","vel_raw","pup_raw","pos_filtered","vel_filtered","pup_filtered","pos_smoothed","vel_smoothed","pup_smoothed"];
-tt = cell(length(datafiles),length(varnames));
-for df = 1:length(datafiles) % for each datafile
-    thisdataset = datafiles{df};
+% 1. 'nevutils' package (downloaded from Mayo Lab GitHub, forked from Smith
+% Lab) should be already in your MATLAB path
 
-    % Extract data from file
-    dat = read_nsx(sprintf('%s/%s.ns5',datafolder,thisdataset),'chanindx',1:3, 'readdata',true);
-    seps = strfind(datafiles{df},'_');
-    if isequal(thisdataset(seps(2)-1),'K')
-        subject = 'kendra';
-    elseif isequal(thisdataset(seps(2)-1),'J')
-        subject = 'patrick';
-    end
+% 2. Extract traces using 'nev2dat' function 
+[dat,~] = nev2dat(sprintf('%s/%s',datafolder,datafile),'readNS5',true,'convertEyes',true);
+trialNames = cellfun(@(q) [datafile,char('.'),char(string(q))], num2cell(1:length(dat))','uni',0);
 
-    % Filter/smooth data and calculate velocity
-    Fs_old = double(dat.hdr.Fs);
-    Fs = 1000;    % desired sampling rate
-    downsampleFactor = Fs_old / Fs;
-    
-    pos = downsample(dat.data',downsampleFactor);
-    x = (0:1/Fs:(size(pos, 1)-1)/Fs);
+% 4. Pull out conditions from trial names, separated by ';' delimeter
+conditions = cellfun(@(x) cellfun(@(q,r) str2double(x(q+1:r-1)), num2cell(strfind(x,'=')), num2cell(strfind(x,';')), 'uni', 0), {dat.text}.', 'uni', 0);
+conditions = vertcat(conditions{:}); conditions = conditions(:,2:5);
 
-    vel = zeros(size(pos));
-    for p = 1:size(pos,2)
-        vel(:,p) = (gradient(pos(:,p)) ./ gradient(x(:))) ./ 1000;
-    end
-    
-    % removing blinks
-    peakIndices = find(abs(vel(:,1))>600 | abs(vel(:,2))>600);
-    groups = {};
-    currentGroup = {peakIndices(1)};
-    for i = 2:numel(peakIndices)
-        if peakIndices(i) == peakIndices(i-1) + 1
-            currentGroup{end+1} = peakIndices(i);
-        else
-            groups{end+1} = currentGroup;
-            currentGroup = {peakIndices(i)};
-        end
-    end
-    groups{end+1} = currentGroup;
-    groups(cellfun(@length, groups, 'UniformOutput', true) == 1) = [];
+% 5. Pull eye traces and trial codes for each trial (cell for each trial)
+eye = {dat.eyedata}.'; % 3 x N (HE,VE,DI) x (N time points)
+trialcodes = {dat.trialcodes}.'; % C x 3 (codes) x (chan,code,time)
+results = {dat.result}.';
+results(cellfun(@isnan, results)) = {150}; % temporary fix for no correct
+resultNames = convertBetween_eventCodes_eventNames(results);
 
-    filteredVel = vel;
-    filteredPos = pos;
-    for b = 1:length(groups)
-        blinkStart = groups{b}{1}-1;
-        blinkEnd = groups{b}{end}+1;
+% 6. Make array of times using start/end time of each trial, helpful for
+% aligning with trial codes and indexing eye data
+times = cellfun(@(q) round(q(1)*1000:q(2)*1000), {dat.time}.', 'uni', 0);
 
-        xq = x(blinkStart-200:blinkEnd+200);
-        ipt = findchangepts(pos(blinkStart-200:blinkEnd+200,1),MaxNumChanges=2);
-        ipt(1) = ipt(1); ipt(2) = ipt(2);
-        for i = 1:size(filteredVel,2)
-            vq = vel(blinkStart-200:blinkEnd+200,i)';
-            vq1 = interp1([xq(1:ipt(1)-5),xq(ipt(2)+5:end)],[vq(1:ipt(1)-5),vq(ipt(2)+5:end)],xq(ipt(1)-4:ipt(2)+4));
-            vq(ipt(1)-4:ipt(2)+4) = vq1;
-            filteredVel(blinkStart-200:blinkEnd+200,i) = vq';
+% 7. For trial code you want to align data to (could be trial start, target
+% onset, etc...), pull out eye traces around that point (preint, postint)
+trialStarts = cellfun(@(q,r) find(q == round(r(r(:,2)==1,3)*1000)), times, trialcodes, 'uni', 0);
 
-            pq = pos(blinkStart-200:blinkEnd+200,i)';
-            pq1 = interp1([xq(1:ipt(1)-5),xq(ipt(2)+5:end)],[pq(1:ipt(1)-5),pq(ipt(2)+5:end)],xq(ipt(1)-4:ipt(2)+4));
-            pq(ipt(1)-4:ipt(2)+4) = pq1;
-            filteredPos(blinkStart-200:blinkEnd+200,i) = pq';
-        end
-    end
-    
-    vel_filtered = medfilt1(filteredVel,2,[],1);
-    pos_filtered = medfilt1(filteredPos,2,[],1);
-    
-    pos_smoothed = smoothdata(pos_filtered,1,"gaussian",kernel);
-    vel_smoothed = smoothdata(vel_filtered,1,"gaussian",kernel);
-    
-    tt(df,:) = [{thisdataset(1:seps(1)-1)} {subject} {str2double(thisdataset(seps(2)+6:end))}  {x(end)} {x} {pos(:,1:2)} {vel(:,1:2)} {pos(:,3)} {pos_filtered(:,1:2)} {vel_filtered(:,1:2)} {pos_filtered(:,3)} {pos_smoothed(:,1:2)} {vel_smoothed(:,1:2)} {pos_smoothed(:,3)}];
+eventCodes = convertBetween_eventCodes_eventNames(eventNames);
+trialMarkers = cellfun(@(t) cellfun(@(q,r) find(q == round(r(r(:,2)==t,3)*1000)), times, trialcodes, 'uni', 0), eventCodes, 'uni', 0)';
+trialMarkers = horzcat(trialMarkers{:});
+trialMarkers(cellfun('isempty',trialMarkers)) = {NaN};
 
-end
+eyePos = cellfun(@(x,y) smoothdata(x.trial(1:2,y:end),2,'gaussian',kernel), eye, trialStarts, 'uni', 0);
+X = cellfun(@(q) 1:size(q,2), eyePos, 'uni', 0);
 
-eyeTraces = cell2table(tt,'VariableNames',varnames);
-eyeTraces.session_name = categorical(string(eyeTraces.session_name)); eyeTraces.subject_name = categorical(string(eyeTraces.subject_name)); %trialTbl.subject_name = categorical(string(trialTbl.subject_name));
-    
-save(sprintf('%s/%s_processed.mat',datafolder,thisdataset(1:seps(1)-1)),'eyeTraces','-v7');
+% 9. Smooth the eye traces for approximating velocity and acceleration
+eyeVel = cellfun(@(q,x) [gradient(q(1,:)') ./ gradient(x(:)./1000),  gradient(q(2,:)') ./ gradient(x(:)./1000)]', eyePos, X, 'uni', 0);
+eyeAcc = cellfun(@(q,x) [gradient(q(1,:)') ./ gradient(x(:)./1000),  gradient(q(2,:)') ./ gradient(x(:)./1000)]', eyeVel, X, 'uni', 0);
 
-%% Plot eye traces
-if nargin > 3
-    f1 = figure;
-    f1.Position = [100 100 900 900];
-    tl = tiledlayout(height(eyeTraces),2);
-    tl.TileSpacing = 'loose'; 
-    tl.Padding = 'compact';
-    
-    for t = 1:height(eyeTraces)
-        nexttile
-        x = eyeTraces.time_s{t};
-        %xline(x(abs(trialTbl.vel_smoothed{t}(:,1))>100),'k','alpha',0.2)
+% 10. Save conditions and eye traces for each trial to a table
+columnNames = ["trialName","trialOutcome","fixDuration","pursuitSpeed","angle","jumpSize",string(eventNames),"eyePos","eyeVel","eyeAcc"];
+tbl = cell2table([trialNames resultNames conditions trialMarkers cellfun(@(x){x},eyePos) cellfun(@(x){x},eyeVel) cellfun(@(x){x},eyeAcc)],'VariableNames',columnNames);
+tbl.trialName = categorical(string(tbl.trialName)); tbl.trialOutcome = categorical(string(tbl.trialOutcome));
 
-        plot(eyeTraces.time_s{t}, eyeTraces.pos_smoothed{t}(:,1),'Color',colors{1});
-        hold on
-        plot(eyeTraces.time_s{t}, eyeTraces.pos_smoothed{t}(:,2),'Color',colors{2});
-        xlim(window_s)
-        if t==1
-            title('position')
-        end
-
-        nexttile
-        plot(eyeTraces.time_s{t}, eyeTraces.vel_smoothed{t}(:,1),'Color',colors{1});
-        hold on
-        plot(eyeTraces.time_s{t}, eyeTraces.vel_smoothed{t}(:,2),'Color',colors{2});
-        xlim(window_s)
-         if t==1
-            title('velocity')
-        end
-    end
-    
-    xlabel(tl,'time (s)');
-    ylabel(tl,'amplitude');
-end
 end
